@@ -138,6 +138,7 @@ userinit(void)
   p->tf->eflags = FL_IF;
   p->tf->esp = PGSIZE;
   p->tf->eip = 0;  // beginning of initcode.S
+  p->pgNum = 0;
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
@@ -190,7 +191,7 @@ fork(void)
   }
 
   // Copy process state from proc.
-  if((np->pgdir = copyuvm(curproc->pgdir, curproc->sz)) == 0){
+  if((np->pgdir = copyuvm(curproc->pgdir, curproc->sz, curproc->pgNum)) == 0){
     kfree(np->kstack);
     np->kstack = 0;
     np->state = UNUSED;
@@ -223,9 +224,9 @@ fork(void)
 
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
-// until its parent calls wait(0) to find out it exited.
+// until its parent calls wait() to find out it exited.
 void
-exit(int status)
+exit(void)
 {
   struct proc *curproc = myproc();
   struct proc *p;
@@ -249,7 +250,7 @@ exit(int status)
 
   acquire(&ptable.lock);
 
-  // Parent might be sleeping in wait(0).
+  // Parent might be sleeping in wait().
   wakeup1(curproc->parent);
 
   // Pass abandoned children to init.
@@ -261,7 +262,6 @@ exit(int status)
     }
   }
 
-  curproc -> status = status;
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
   sched();
@@ -271,7 +271,7 @@ exit(int status)
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
-wait(int *status)
+wait(void)
 {
   struct proc *p;
   int havekids, pid;
@@ -286,11 +286,6 @@ wait(int *status)
         continue;
       havekids = 1;
       if(p->state == ZOMBIE){
-
-        if (p-> status != 0){
-          *status = p-> status;
-        }
-
         // Found one.
         pid = p->pid;
         kfree(p->kstack);
@@ -315,50 +310,6 @@ wait(int *status)
     // Wait for children to exit.  (See wakeup1 call in proc_exit.)
     sleep(curproc, &ptable.lock);  //DOC: wait-sleep
   }
-}
-
-int waitpid(int pid, int *status, int options)
-{
-	int havekids;
-	struct proc *p;
-	acquire (&ptable.lock);
-  struct proc *curproc = myproc();
-	for(;;)
-	{
-		havekids = 0;
-		for(p = ptable.proc; &ptable.proc[NPROC] > p; ++p)
-		{
-			if(pid != p->pid){continue;}
-			havekids = 1;
-			// Clear the process if our child
-			if(p->state == ZOMBIE)
-			{
-				if(p->status != 0){*status = p->status;}
-				pid = p->pid;
-				kfree(p->kstack);
-				p->kstack = 0;
-				freevm(p->pgdir);
-				p->pid = 0;
-				p->parent = 0;
-				p->killed = 0;
-				p->name[0] = 0;
-				p->state = UNUSED;
-				release(&ptable.lock);
-				return pid;
-			}
-			else
-			{
-				p->wait_count++;
-				p->wait_pid[p->wait_count] = curproc;
-			}
-		}
-		if(!havekids || curproc->killed) // as not to wait if there are not children
-		{
-			release(&ptable.lock);
-			return -1;
-      }
-		sleep(curproc, &ptable.lock); // sleep to wait for the process to exit
-	}	
 }
 
 //PAGEBREAK: 42
@@ -581,9 +532,4 @@ procdump(void)
     }
     cprintf("\n");
   }
-}
-
-void
-hello(void){
-  cprintf("\nTHIS IS COMING FROM THE KERNEL\n");
 }
